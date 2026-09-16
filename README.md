@@ -1,143 +1,82 @@
-# AV Gear Manager
+# AV Room Equipment Desk
 
-A simple Equipment Rental / AV Room Management System built for the Auriga IT Builder Round.
-
-## Goal
-
-The system tracks college AV equipment and helps staff follow up on returns. It covers the core problem areas: borrowing, availability, returns, overdue tracking, late fees, deposits/refunds, borrowing limits, and in-app return nudges.
+A small web app that replaces the paper register for lending out AV gear
+(DSLRs, projectors, mics, tripods...). It tracks what's out, what's free,
+who has what, and nudges people when things are late.
 
 ## Features
 
-- Dashboard with inventory and borrowing statistics
-- Equipment inventory with multiple units
-- Availability tracking by date range
-- Future booking conflict prevention for overlapping date ranges
-- Borrowing workflow
-- Borrowing limit of 3 active units per student
-- Return workflow
-- Automatic overdue detection
-- Per-day late fee calculation
-- Refundable deposit calculation
-- In-app return reminders / nudges
-- Borrowing history
-- SQLite database
-- Responsive UI
+- **Equipment catalog** with multiple interchangeable units per item (e.g. 3 DSLRs), a per-item deposit and a per-item late fee/day.
+- **Borrow** an item: checks real availability (not just "is it in the room right now" but "will a unit be free for my whole loan window"), enforces a per-borrower cap on simultaneous active loans, and creates a loan with a due date.
+- **Availability check** for any date or date range — this is what answers "is a DSLR free this weekend?" — via `GET /api/availability/<equipment_id>?start=YYYY-MM-DD&end=YYYY-MM-DD`.
+- **Return** an item: computes days late, charges a late fee (days × rate), and refunds `deposit − late fee` (never below zero).
+- **Transfer** an active loan to a different borrower: the due date carries over unchanged, and the item's availability is unaffected (it's still one unit checked out — only *who* has it changes). A transfer is refused if it would push the new borrower over the same simultaneous-loan cap used for normal borrowing.
+- **Dashboard nudges**: an "Overdue" panel and a "Due within a day" panel, so the desk knows who to chase without scanning a paper log.
 
-## Tech Stack
+## Tech stack
 
-- Python
-- Flask
-- SQLite
-- HTML/CSS
-- Jinja2
+Python 3 + Flask + SQLite (stdlib `sqlite3`, no ORM). No external services, no build step — this keeps setup in Codespaces to one command.
 
-## Setup
+## Project layout
 
-### 1. Create a virtual environment (optional)
-
-```bash
-python -m venv .venv
+```
+app.py              Flask routes (the web layer only)
+rental_logic.py      All business rules: availability, borrow, return, transfer, nudges
+database.py          SQLite connection + schema init helper
+schema.sql            Table definitions
+seed.py               Sample data (run once for a demo)
+templates/            Jinja2 HTML pages (Bootstrap via CDN, no build step)
+tests/                Unit tests for rental_logic.py
+.devcontainer/         Codespaces config (auto-installs requirements, forwards port 5000)
 ```
 
-Activate it:
+## Setup & running (GitHub Codespaces or local)
 
-Linux/macOS:
-```bash
-source .venv/bin/activate
+1. Open the repo in a Codespace (or clone it locally with Python 3.10+ installed).
+   In Codespaces, `.devcontainer/devcontainer.json` runs step 2 for you automatically.
+2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. (Optional but recommended for a demo) seed some sample equipment and borrowers:
+   ```
+   python seed.py
+   ```
+   This creates `rental.db` with 4 equipment types (DSLR ×3, Projector ×2, Mic ×5, Tripod ×4) and 4 sample borrowers.
+   Skip this step if you'd rather start from an empty desk — the app creates
+   an empty `rental.db` automatically on first run either way.
+4. Run the app:
+   ```
+   python app.py
+   ```
+5. Open the forwarded port 5000 (Codespaces will prompt you, or click the "Ports" tab). Locally, visit `http://127.0.0.1:5000`.
+
+## Using it
+
+- **Dashboard** (`/`) — availability at a glance, plus overdue/due-soon nudges.
+- **Equipment** (`/equipment`) — add new gear types and see current stock.
+- **Borrowers** (`/borrowers`) — add people/clubs who can borrow.
+- **Borrow** (`/borrow`) — pick equipment + borrower (+ optional custom loan length) to create a loan.
+- **Loans** (`/loans`) — see active/returned/all loans; **Return** or **Transfer** each active loan from here. Overdue rows are highlighted.
+- **Availability API** — `GET /api/availability/<equipment_id>` for "right now", or add `?start=...&end=...` for a date range (e.g. "this weekend").
+
+## Running tests
+
+```
+python -m unittest tests.test_rental_logic -v
 ```
 
-Windows:
-```bash
-.venv\Scripts\activate
-```
+The tests cover: availability shrinking/growing on borrow/return, the total-units cap, the per-borrower simultaneous-loan cap, on-time vs. late returns and deposit math, late fees never exceeding the deposit, and — for the transfer feature — that the due date and availability are untouched by a transfer, that a returned loan can't be transferred, and that a transfer is blocked if it would put the new borrower over their loan cap.
 
-### 2. Install dependencies
+## Debugging notes
 
-```bash
-pip install -r requirements.txt
-```
+- The app auto-creates `rental.db` (SQLite file, gitignored) on first request if it doesn't exist — delete it any time to reset to a blank desk, or re-run `python seed.py` (which wipes and reseeds it).
+- Flask runs with `debug=True`, so tracebacks appear in the browser and the server auto-reloads on code changes.
+- If port 5000 doesn't auto-forward in Codespaces, open the "Ports" panel and forward it manually, or check `.devcontainer/devcontainer.json`.
+- All business rules (limits, fees, availability math) live in `rental_logic.py` and raise `RentalError` with a user-facing message on any rule violation — that message is what gets flashed on screen, so it's the first place to look if a "why did this fail?" question comes up.
 
-### 3. Run
+## Configuration
 
-```bash
-python app.py
-```
-
-The application will run on:
-
-`http://127.0.0.1:5000`
-
-In GitHub Codespaces, open the forwarded port 5000 from the Ports panel.
-
-## First Use
-
-1. Open Dashboard.
-2. Check the seeded equipment.
-3. Add more equipment if required.
-4. Create a borrowing.
-5. Check the Return Reminders section.
-6. Return the item from Borrowings.
-7. The system calculates late fee and deposit refund automatically.
-
-## Business Rules
-
-### Availability
-
-Availability is calculated for the requested date range, not just for today.
-
-For an equipment type:
-
-`period_available = total_quantity - overlapping_active_booked_units`
-
-Two active bookings overlap when:
-
-`existing_start <= requested_end AND existing_end >= requested_start`
-
-This prevents two clubs from booking the same units for overlapping dates.
-
-### Borrowing Limit
-
-A student can have a maximum of 3 active equipment units.
-
-### Late Fee
-
-```text
-late_fee = late_days × daily_late_fee × quantity
-```
-
-### Deposit Refund
-
-```text
-refund = max(0, deposit - late_fee)
-```
-
-### Booking Window
-
-A booking can be up to 14 calendar days. This is a configurable assessment assumption.
-
-### Return Nudges
-
-The dashboard labels active borrowings as Due Soon, Due Today, or Overdue. The Remind button provides an in-app nudge message. No external email/SMS service is required.
-
-## Database
-
-SQLite creates `equipment.db` automatically on first run.
-
-Tables:
-- `equipment`
-- `borrowers`
-- `borrowings`
-
-## Debugging
-
-If the port is busy, stop the existing Flask process and run again.
-
-If the database becomes inconsistent during development, stop the app, delete `equipment.db`, and restart. The sample inventory will be recreated.
-
-## Assessment Notes
-
-The implementation intentionally prioritizes the problem statement's core workflow:
-
-**Check date-range availability → Borrow → Track → Reminder → Return → Late Fee/Deposit → History**
-
-The system is kept small enough to understand and run in GitHub Codespaces.
+Two constants worth knowing about, both in `rental_logic.py`:
+- `MAX_ACTIVE_LOANS_PER_BORROWER` (default 3) — caps how much of the room one person can hold at once.
+- Per-equipment `deposit_amount`, `late_fee_per_day`, and `default_loan_days` are set when the item is added (via `/equipment` or `seed.py`), so a camera can carry a bigger deposit than a mic.
